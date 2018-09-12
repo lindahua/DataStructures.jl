@@ -37,6 +37,7 @@ module DataStructures
     export heapify!, heapify, heappop!, heappush!, isheap
 
     export OrderedDict, OrderedSet
+    export WeakKeyIdDict
     export DefaultDict, DefaultOrderedDict
     export Trie, subtrie, keys_with_prefix, path
 
@@ -71,6 +72,7 @@ module DataStructures
     include("ordered_dict.jl")
     include("ordered_set.jl")
     include("default_dict.jl")
+    include("weakkeyid_dict.jl")
     include("trie.jl")
 
     include("int_set.jl")
