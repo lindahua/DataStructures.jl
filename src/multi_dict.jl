@@ -4,33 +4,47 @@ struct MultiDict{K,V}
     d::Dict{K,Vector{V}}
 
     MultiDict{K,V}() where {K,V} = new{K,V}(Dict{K,Vector{V}}())
-    MultiDict{K,V}(kvs) where {K,V} = new{K,V}(Dict{K,Vector{V}}(kvs))
-    MultiDict{K,V}(ps::Pair{K,Vector{V}}...) where {K,V} = new{K,V}(Dict{K,Vector{V}}(ps...))
+    MultiDict{K,V}(d::Dict) where {K,V} = new{K,V}(d)
 end
 
-MultiDict() = MultiDict{Any,Any}()
-MultiDict(kv::Tuple{}) = MultiDict()
-MultiDict(kvs) = multi_dict_with_eltype(kvs, eltype(kvs))
-
-multi_dict_with_eltype(kvs, ::Type{Tuple{K,Vector{V}}}) where {K,V} = MultiDict{K,V}(kvs)
-function multi_dict_with_eltype(kvs, ::Type{Tuple{K,V}}) where {K,V}
+MultiDict{K,V}(pairs::Pair...) where {K,V} = MultiDict{K,V}(pairs)
+function MultiDict{K,V}(kvs) where {K,V}
     md = MultiDict{K,V}()
+    sizehint!(md.d, length(kvs))  # This might be an overestimate, but :shrug:
     for (k,v) in kvs
         insert!(md, k, v)
     end
     return md
 end
-multi_dict_with_eltype(kvs, t) = MultiDict{Any,Any}(kvs)
 
+MultiDict() = MultiDict{Any,Any}()
+MultiDict(kv::Tuple{}) = MultiDict()
+MultiDict(d::Dict{K,<:AbstractVector{V}}) where {K,V} = MultiDict{K,V}(d)
+MultiDict(ps::Pair...) = MultiDict(ps)
+MultiDict(kvs) = multi_dict_with_eltype(kvs, eltype(kvs))
+
+TP = Base.TP  # Tuple and/or Pair
+
+multi_dict_with_eltype(kvs, ::TP{K,V}) where {K,V} = MultiDict{K,V}(kvs)
+multi_dict_with_eltype(kvs, ::Type) = Base.grow_to!(multi_dict_with_eltype(Base.@default_eltype(typeof(kvs))), kvs)
+multi_dict_with_eltype(::TP{K,V}) where {K,V} = MultiDict{K,V}()
+multi_dict_with_eltype(::Type) = MultiDict{Any,Any}()
+multi_dict_with_eltype(kv::Base.Generator, ::TP{K,V}) where {K,V} = MultiDict{K, V}(kv)
+function multi_dict_with_eltype(kv::Base.Generator, ::Type)
+    T = Base.@default_eltype(kv)
+    if T <: Union{Pair, Tuple{Any, Any}} && isconcretetype(T)
+        return multi_dict_with_eltype(kv, T)
+    end
+    return Base.grow_to!(multi_dict_with_eltype(T), kv)
+end
 
 MultiDict(kv::AbstractArray{Pair{K,V}}) where {K,V}  = MultiDict(kv...)
-function MultiDict(ps::Pair{K,V}...) where {K,V}
-    md = MultiDict{K,V}()
-    for (k,v) in ps
-        insert!(md, k, v)
-    end
-    return md
-end
+MultiDict(ps::Pair{K,V}...) where {K,V}  = MultiDict{K,V}(ps)
+
+# Copy constructors
+MultiDict{K,V}(md::MultiDict) where {K,V} = MultiDict(md.d)
+MultiDict(md::MultiDict) = MultiDict(md.d)
+
 
 ## Functions
 
@@ -43,6 +57,7 @@ end
 Base.sizehint!(d::MultiDict, sz::Integer) = (sizehint!(d.d, sz); d)
 Base.copy(d::MultiDict) = MultiDict(d)
 Base.empty(d::MultiDict{K,V}) where {K,V} = MultiDict{K,V}()
+Base.empty(a::MultiDict, ::Type{K}, ::Type{V}) where {K, V} = MultiDict{K, V}()
 Base.:(==)(d1::MultiDict, d2::MultiDict) = d1.d == d2.d
 Base.delete!(d::MultiDict, key) = (delete!(d.d, key); d)
 Base.empty!(d::MultiDict) = (empty!(d.d); d)
@@ -121,4 +136,44 @@ function Base.iterate(e::EnumerateAll, s)
     end
     v, vst = vstate
     return ((k, v), (dstate, k, vs, vstate))
+end
+
+# grow_to! copied from Base -- needed for abstract generator constructor
+function Base.grow_to!(dest::MultiDict{K, V}, itr) where V where K
+    y = iterate(itr)
+    y === nothing && return dest
+    ((k, v), st) = y
+    dest2 = empty(dest, typeof(k), typeof(v))
+    insert!(dest2, k, v)
+    Base.grow_to!(dest2, itr, st)
+end
+# grow_to! copied from Base -- needed for abstract generator constructor
+# this is a special case due to (1) allowing both Pairs and Tuples as elements,
+# and (2) Pair being invariant. a bit annoying.
+function Base.grow_to!(dest::MultiDict{K,V}, itr, st) where V where K
+    y = iterate(itr, st)
+    while y !== nothing
+        (k, v), st = y
+        if isa(k, K) && isa(v, V)
+            insert!(dest, k, v)
+        else
+            new_md = empty(dest, promote_typejoin(K,typeof(k)), promote_typejoin(V,typeof(v)))
+            merge!(new_md, dest)
+            insert!(new_md, k, v)
+            return grow_to!(new_md, itr, st)
+        end
+        y = iterate(itr, st)
+    end
+    return dest
+end
+
+function Base.merge!(md::MultiDict, others::MultiDict...)
+    for other in others
+        for (k,vs) in other
+            for v in vs
+                insert!(md, k, v)
+            end
+        end
+    end
+    return md
 end
